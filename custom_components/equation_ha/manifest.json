@@ -1,0 +1,9 @@
+{
+  "domain": "equation_ha",
+  "name": "Equation Heaters (HA 2025)",
+  "config_flow": true,
+  "version": "1.0.0",
+  "iot_class": "cloud_polling",
+  "requirements": ["equation-sdk==1.0.7"],
+  "codeowners": ["@Nacho2001903"]
+}

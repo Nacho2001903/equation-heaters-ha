@@ -1,0 +1,27 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Device is already configured"
+        },
+        "error": {
+            "invalid_auth": "Invalid authentication",
+            "unable_get_installations": "An error occurred while retrieving installations"
+        },
+        "step": {
+            "user": {
+                "data": {
+                    "equation_password": "Password",
+                    "equation_username": "Username"
+                },
+                "title": "Connect to Equation Connect"
+
+            },
+            "installation": {
+                "data": {
+                    "equation_installation": "Installations"
+                },
+                "title":"Select installation"
+            }
+        }
+    }
+}
