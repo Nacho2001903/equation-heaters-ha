@@ -47,7 +47,6 @@ async def async_setup_entry(
     """Set up the radiator climate entity from the config entry."""
     coordinator: EquationDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Register the Entity classes and platform on the coordinator.
     coordinator.add_entities_for_seen_keys(
         async_add_entities, [EquationHaClimate], "climate"
     )
@@ -62,7 +61,6 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
         coordinator: EquationDataUpdateCoordinator,
     ) -> None:
         """Init the Climate entity."""
-
         super().__init__(
             coordinator, radiator, name=radiator.name, unique_id=radiator.id
         )
@@ -74,17 +72,14 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
 
     @property
     def icon(self) -> str | None:
-        """Icon of the entity."""
         return "mdi:radiator"
 
     @property
     def temperature_unit(self) -> str:
-        """Temperature unit."""
         return UnitOfTemperature.CELSIUS
 
     @property
     def target_temperature(self) -> float:
-        """Return the current temperature."""
         if self._radiator.mode == RADIATOR_MODE_MANUAL:
             if self._radiator.preset == RADIATOR_PRESET_ECO:
                 return self._radiator.eco_temp
@@ -97,66 +92,52 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
 
     @property
     def current_temperature(self) -> float:
-        """Get current temperature (Probe)."""
         return self._radiator.temp_probe
 
     @property
     def max_temp(self) -> float:
-        """Max selectable temperature."""
         if self._radiator.user_mode_supported and self._radiator.user_mode:
             return self._radiator.um_max_temp
-
         return RADIATOR_TEMP_MAX
 
     @property
     def min_temp(self) -> float:
-        """Minimum selectable temperature."""
         if self._radiator.user_mode_supported and self._radiator.user_mode:
             return self._radiator.um_min_temp
-
         return RADIATOR_TEMP_MIN
 
     @property
     def target_temperature_high(self) -> float:
-        """Max selectable target temperature."""
-        if self._radiator.user_mode_supported and self._radiator.user_mode:
-            return self._radiator.um_max_temp
-
-        return RADIATOR_TEMP_MAX
+        return self.max_temp
 
     @property
     def target_temperature_low(self) -> float:
-        """Minimum selectable target temperature."""
-        if self._radiator.user_mode_supported and self._radiator.user_mode:
-            return self._radiator.um_min_temp
+        return self.min_temp
 
-        return RADIATOR_TEMP_MIN
-
+    # 🔥 AQUÍ ESTÁ LA CLAVE
     @property
     def supported_features(self) -> ClimateEntityFeature:
-        """Flag supported features."""
         return (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TURN_ON
+            | ClimateEntityFeature.TURN_OFF
         )
 
     @property
     def target_temperature_step(self) -> float | None:
-        """Temperature step."""
         return RADIATOR_TEMP_STEP
 
     @property
     def hvac_modes(self) -> list[str]:
-        """Return hvac modes available."""
         return [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
 
     @property
     def preset_modes(self) -> list[str]:
-        """Return the available preset modes."""
         return [PRESET_COMFORT, PRESET_ECO, PRESET_EQUATION_ICE]
 
     @property
     def hvac_mode(self) -> str:
-        """Return the current HVAC mode."""
         if not self._radiator.power:
             return HVACMode.OFF
 
@@ -167,26 +148,19 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
 
     @property
     def hvac_action(self) -> str:
-        """Return the current HVAC action."""
-
-        # Special mode for AUTO mode and waiting for schedule to activate.
         if (
             self._radiator.mode == RADIATOR_MODE_AUTO
             and self._radiator.preset == HVACMode.OFF
         ):
             return HVACAction.IDLE
 
-        # Forced to off, either on Manual or Auto mode.
         if not self._radiator.power:
             return HVACAction.OFF
 
-        # Otherwise, it's heating.
         return HVACAction.HEATING
 
     @property
     def preset_mode(self) -> str | None:
-        """Convert the device's preset to HA preset modes."""
-
         if self._radiator.preset == RADIATOR_PRESET_ECO:
             return PRESET_ECO
         if self._radiator.preset == RADIATOR_PRESET_COMFORT:
@@ -194,40 +168,26 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
         if self._radiator.preset == RADIATOR_PRESET_ICE:
             return PRESET_EQUATION_ICE
 
-        # Also captures "none" (man mode, temperature outside presets)
         return None
 
     async def async_set_temperature(self, **kwargs):
-        """Set new target temperature."""
         target_temperature = float(kwargs["temperature"])
 
         if not await self.device_manager.send_command(
             self._radiator, CMD_SET_TEMP, target_temperature
         ):
-            LOGGER.error(
-                "Failed to set Temperature [%s] for [%s]",
-                target_temperature,
-                self._radiator.name,
-            )
-
             raise HomeAssistantError(
-                f"Failed to set HVAC mode for {self._radiator.name}"
+                f"Failed to set temperature for {self._radiator.name}"
             )
 
         await self._signal_thermostat_update()
 
     async def async_set_hvac_mode(self, hvac_mode):
-        """Set new target hvac mode."""
-
         LOGGER.debug("Setting HVAC mode to %s", hvac_mode)
 
         if not await self.device_manager.send_command(
             self._radiator, CMD_SET_HVAC_MODE, hvac_mode
         ):
-            LOGGER.error(
-                "Failed to set HVAC mode [%s] for [%s]", hvac_mode, self._radiator.name
-            )
-
             raise HomeAssistantError(
                 f"Failed to set HVAC mode for {self._radiator.name}"
             )
@@ -235,27 +195,28 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
         await self._signal_thermostat_update()
 
     async def async_set_preset_mode(self, preset_mode):
-        """Set new target preset mode."""
         LOGGER.debug("Setting preset mode: %s", preset_mode)
 
         if not await self.device_manager.send_command(
             self._radiator, CMD_SET_PRESET, preset_mode
         ):
-            LOGGER.error(
-                "Failed to set preset mode [%s] for [%s]",
-                preset_mode,
-                self._radiator.name,
-            )
-
             raise HomeAssistantError(
-                f"Failed to set HVAC mode for {self._radiator.name}"
+                f"Failed to set preset mode for {self._radiator.name}"
             )
 
         await self._signal_thermostat_update()
 
-    async def _signal_thermostat_update(self):
-        """Signal a radiator change."""
+    # ✅ NUEVO: TURN ON / OFF
+    async def async_turn_on(self):
+        """Turn the radiator on."""
+        LOGGER.debug("Turning ON radiator %s", self._radiator.name)
+        await self.async_set_hvac_mode(HVACMode.HEAT)
 
-        # Update the data
+    async def async_turn_off(self):
+        """Turn the radiator off."""
+        LOGGER.debug("Turning OFF radiator %s", self._radiator.name)
+        await self.async_set_hvac_mode(HVACMode.OFF)
+
+    async def _signal_thermostat_update(self):
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
