@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC
+import asyncio
 
 from equationsdk.device import EquationDevice
 
@@ -68,10 +69,14 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
             name=radiator.name,
         )
 
-        # 🔐 Estado recordado para apagado/encendido
+        # 🔐 Estado recordado
         self._last_hvac_mode: HVACMode | None = None
         self._last_target_temperature: float | None = None
         self._last_preset_mode: str | None = None
+
+    # ---------------------------------------------------------------------
+    # Properties
+    # ---------------------------------------------------------------------
 
     @property
     def icon(self) -> str | None:
@@ -142,23 +147,14 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
     def hvac_mode(self) -> str:
         if not self._radiator.power:
             return HVACMode.OFF
-
         if self._radiator.mode == RADIATOR_MODE_AUTO:
             return HVACMode.AUTO
-
         return HVACMode.HEAT
 
     @property
     def hvac_action(self) -> str:
-        if (
-            self._radiator.mode == RADIATOR_MODE_AUTO
-            and self._radiator.preset == HVACMode.OFF
-        ):
-            return HVACAction.IDLE
-
         if not self._radiator.power:
             return HVACAction.OFF
-
         return HVACAction.HEATING
 
     @property
@@ -169,13 +165,14 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
             return PRESET_COMFORT
         if self._radiator.preset == RADIATOR_PRESET_ICE:
             return PRESET_EQUATION_ICE
-
         return None
+
+    # ---------------------------------------------------------------------
+    # Commands
+    # ---------------------------------------------------------------------
 
     async def async_set_temperature(self, **kwargs):
         temperature = float(kwargs["temperature"])
-
-        # Guardamos temperatura manual
         self._last_target_temperature = temperature
         self._last_preset_mode = None
 
@@ -188,24 +185,7 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
 
         await self._signal_thermostat_update()
 
-    async def async_set_hvac_mode(self, hvac_mode):
-        LOGGER.debug("Setting HVAC mode to %s", hvac_mode)
-
-        if hvac_mode != HVACMode.OFF:
-            self._last_hvac_mode = hvac_mode
-
-        if not await self.device_manager.send_command(
-            self._radiator, CMD_SET_HVAC_MODE, hvac_mode
-        ):
-            raise HomeAssistantError(
-                f"Failed to set HVAC mode for {self._radiator.name}"
-            )
-
-        await self._signal_thermostat_update()
-
     async def async_set_preset_mode(self, preset_mode):
-        LOGGER.debug("Setting preset mode: %s", preset_mode)
-
         self._last_preset_mode = preset_mode
         self._last_target_temperature = None
 
@@ -218,29 +198,85 @@ class EquationHaClimate(EquationRadiatorEntity, ClimateEntity, ABC):
 
         await self._signal_thermostat_update()
 
-    async def async_turn_on(self):
-        """Restore last active state when turning on."""
-        LOGGER.debug("Turning ON radiator %s", self._radiator.name)
-
-        hvac_mode = self._last_hvac_mode or HVACMode.HEAT
-        await self.async_set_hvac_mode(hvac_mode)
-
-        if self._last_preset_mode:
-            await self.async_set_preset_mode(self._last_preset_mode)
-        elif self._last_target_temperature is not None:
-            await self.async_set_temperature(
-                temperature=self._last_target_temperature
-            )
+    # ---------------------------------------------------------------------
+    # FORCE ON / OFF (the important part)
+    # ---------------------------------------------------------------------
 
     async def async_turn_off(self):
-        """Save state and turn off."""
-        LOGGER.debug("Turning OFF radiator %s", self._radiator.name)
+        """Force turn off radiator (retry until confirmed)."""
+        LOGGER.warning("FORCING OFF radiator %s", self._radiator.name)
 
         self._last_hvac_mode = self.hvac_mode
         self._last_target_temperature = self.target_temperature
         self._last_preset_mode = self.preset_mode
 
-        await self.async_set_hvac_mode(HVACMode.OFF)
+        for attempt in range(1, 4):
+            await self.device_manager.send_command(
+                self._radiator, CMD_SET_HVAC_MODE, HVACMode.OFF
+            )
+
+            await asyncio.sleep(2)
+            await self.coordinator.async_request_refresh()
+
+            if not self._radiator.power:
+                LOGGER.info(
+                    "Radiator %s turned OFF (attempt %s)",
+                    self._radiator.name,
+                    attempt,
+                )
+                self.async_write_ha_state()
+                return
+
+            LOGGER.warning(
+                "Radiator %s still ON after OFF attempt %s",
+                self._radiator.name,
+                attempt,
+            )
+
+        raise HomeAssistantError(
+            f"Failed to turn off radiator {self._radiator.name}"
+        )
+
+    async def async_turn_on(self):
+        """Force turn on radiator (retry until confirmed)."""
+        LOGGER.warning("FORCING ON radiator %s", self._radiator.name)
+
+        hvac_mode = self._last_hvac_mode or HVACMode.HEAT
+
+        for attempt in range(1, 4):
+            await self.device_manager.send_command(
+                self._radiator, CMD_SET_HVAC_MODE, hvac_mode
+            )
+
+            await asyncio.sleep(2)
+            await self.coordinator.async_request_refresh()
+
+            if self._radiator.power:
+                LOGGER.info(
+                    "Radiator %s turned ON (attempt %s)",
+                    self._radiator.name,
+                    attempt,
+                )
+
+                if self._last_preset_mode:
+                    await self.async_set_preset_mode(self._last_preset_mode)
+                elif self._last_target_temperature is not None:
+                    await self.async_set_temperature(
+                        temperature=self._last_target_temperature
+                    )
+
+                self.async_write_ha_state()
+                return
+
+            LOGGER.warning(
+                "Radiator %s still OFF after ON attempt %s",
+                self._radiator.name,
+                attempt,
+            )
+
+        raise HomeAssistantError(
+            f"Failed to turn on radiator {self._radiator.name}"
+        )
 
     async def _signal_thermostat_update(self):
         await self.coordinator.async_request_refresh()
